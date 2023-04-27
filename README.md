@@ -1,2 +1,3 @@
-# bias_fairness_in_ml
-Applied Labs for 'Achieving Fairness in ML/AI'
+# Applied Labs for 'Achieving Fairness in ML/AI'
+
+1.  R/Tidyverse assessment of medical expenditure data: `tutorial_medical_expenditure.Rmd`
