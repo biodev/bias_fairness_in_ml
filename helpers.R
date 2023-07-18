@@ -111,9 +111,10 @@ meps_base_recipe <- function(meps_tbl, addtl_vars=NULL){
 
 }
 
-#R implementation of bias-reduction reweighting (reference)
-#given a (training) dataset tibble, column name of categorical outcome and column name of protected feature
-#return the tibble with a new column 'instance_weights' containin the bias-reduction weights
+#R implementation of bias-reduction reweighting:
+#Kamiran, F., Calders, T. Data preprocessing techniques for classification without discrimination. Knowl Inf Syst 33, 1–33 (2012). https://doi.org/10.1007/s10115-011-0463-8
+#Given a (training) dataset tibble, column name of categorical outcome and column name of protected feature
+#return the tibble with a new column 'instance_weights' containing the bias-reduction weights
 reweight <- function(tbl, outcome, protected_feature){
 
   group_by(
@@ -148,7 +149,9 @@ reweight <- function(tbl, outcome, protected_feature){
 
 }
 
-#where factor levels are non-positive, positive respectively
+#R implementation of disparate_impact: 
+#https://github.com/Trusted-AI/AIF360/blob/master/aif360/sklearn/metrics/metrics.py#L537C15-L537C15
+#All factor levels are non-positive, positive respectively
 #and unprotected, protected respectively
 disparate_impact <- function(tbl, outcome, predicted_outcome, protected_feature){
 
@@ -215,7 +218,8 @@ disparate_impact <- function(tbl, outcome, predicted_outcome, protected_feature)
 
 }
 
-#where factor levels are non-positive, positive respectively
+#Compute Balanced Accuracy for a given probability cutoff
+#Here factor levels are non-positive, positive respectively
 #and unprotected, protected respectively
 cutoff_stats <- function(val_tbl, cutoff, outcome, protected_feature){
 
@@ -259,7 +263,7 @@ cutoff_stats <- function(val_tbl, cutoff, outcome, protected_feature){
 
 }
 
-
+#Compute Balanced Accuracy for a range of probability cutoffs
 alternate_cutoff_stats <- function(val_tbl, outcome, protected_feature){
   
   #iterate over a series of candidate thresholds and collate results into a tibble

@@ -1,16 +1,58 @@
 ---
 title: "Assessing and Addressing Fairness in a Predictive Model of Medical Expenditure"
-date: "March 3 2023"
+date: "July 18 2023"
 output:
   html_document:
     df_print: paged
+    theme: journal
 editor_options:
   markdown:
     wrap: 72
 ---
 
-The below is based on the python tutorial from IBMs
+This notebook is based on the python tutorial from IBM's
 [AIF360](https://nbviewer.org/github/IBM/AIF360/blob/master/examples/tutorial_medical_expenditure.ipynb)
+
+# Dataset
+
+The dataset used in this tutoral was adapted from the ['Medical
+Expenditure Panel Survey'](https://meps.ahrq.gov/mepsweb/).
+
+-   The specific data used is the 2015 Full Year Consolidated Data File
+    (h181.csv) as well as the 2016 Full Year Consolidated Data File
+    (h192.csv).
+
+-   The 2015 file contains data from rounds 3,4,5 of panel 19 (2014) and
+    rounds 1,2,3 of panel 20 (2015).
+
+-   The 2016 file contains data from rounds 3,4,5 of panel 20 (2015) and
+    rounds 1,2,3 of panel 21 (2016).
+
+-   The panel 19 dataset is split into 3 parts: a train, a validation,
+    and a test/deployment part.
+
+-   The panel 21 data is used for testing data/concept drift after model
+    training.
+
+-   For each dataset, the sensitive attribute is 'RACE' consisting of
+    'Whites' defined by the features RACEV2X = 1 (White) and HISPANX = 2
+    (non Hispanic) and 'Non-Whites' that included everyone else.
+
+-   Our modelling goal is to predict 'high' utilization. To measure
+    utilization, the total number of trips requiring some sort of
+    medical care was recorded. Respondents were considered to have high
+    utilization if they had 10 or more visits (\~17%).
+
+# Tidymodels
+
+The [`tidymodels`](https://www.tidymodels.org/packages/) collection of R
+packages simplifies and standardizes the process of modeling and machine
+learning in R by providing a consistent framework that integrates with
+the tidyverse. It emphasizes tidy data principles and offers a wide
+range of modeling techniques, tuning, and evaluation functionalities.
+
+The idea is to specify `recipes` that simplify the pre and post processing steps
+typially used in predicitive modeling (or model fitting in general).
 
 # Downloading and Preprocessing data
 
@@ -31,6 +73,16 @@ Rscript generate_data.R
 
 ```
 
+Additional setup for aif360
+
+```{bash,  echo = TRUE, eval = FALSE}
+
+conda create -n aif360 python=3 pip
+conda activate aif360
+pip install aif360
+
+```
+
 ## 1. Load required libraries and Panel 19 data
 
 ```{r message=FALSE}
@@ -43,10 +95,15 @@ library(knitr)
 library(rmarkdown)
 library(pander)
 
+#optional
+library(reticulate)
+use_condaenv("aif360")
+
 source("helpers.R")
 
 meps_19 <- process_meps_csv("h181.csv", 19)
 
+#optional
 readr::write_csv(meps_19, file="h181-processed.csv")
 
 ```
@@ -57,7 +114,7 @@ As in the aif360 tutorial we will split MEPS 19 into train (50%),
 validate (30%), and test (20%)
 
 However, because `high_utilization` is unbalanced, we will use it as a
-stratification factor to ensure equal representation amongst the splits
+stratification factor to ensure equal representation among the splits
 
 ```{r}
 
@@ -88,8 +145,11 @@ We can now carry out fairness re-weighing applied to training set only
 
 ```{r}
 
+meps_19_train <- training(meps_19_split)
+
+#R-version from helpers.R
 meps_19_train <- reweight(
-  training(meps_19_split),
+  meps_19_train,
   "high_utilization",
   "RACE")
 
@@ -101,11 +161,29 @@ meps_19_train %>%
   ) %>%
   summarize(
     n(),
-    #as the weights are define per combination of outcome/feature
+    #only the first as the weights are define per combination of outcome/feature
     instance_weights[1]
   ) %>%
   kable()
 
+```
+
+Alternatively can use the python version
+
+```{python}
+
+from aif360.sklearn.preprocessing import Reweighing
+import pandas as pd
+
+reweighing_obj = Reweighing(prot_attr='RACE')
+
+inp_df = r.meps_19_train.set_index('RACE', drop=False)
+
+python_weights = reweighing_obj.fit_transform(X=inp_df, y=r.meps_19_train.high_utilization)[0]
+
+python_weights.reset_index(drop=True, inplace=True)
+
+python_weights.groupby(['high_utilization', 'RACE']).agg({'instance_weights':'first'})
 ```
 
 With the training dataset in hand, we will now form testing/validation
@@ -144,7 +222,7 @@ kable()
 
 ```
 
-## 3. Learning a Regularized Logistic Regression (elastic net) classifier
+## 3. Learning a Logistic Regression (elastic net) classifier
 
 We will fit two versions of the model, one without and one with the
 weights
@@ -234,7 +312,7 @@ lr_stats <-
   lr_res %>% 
   collect_predictions(parameters = lr_best)
 
-#get ahold of the validation set annotated with predicted probailities
+#get ahold of the validation set annotated with predicted probabilities
 #also ensure the protected variable (RACE) is encoded as a factor with 
 #non-protected level, protected level.
 meps_validation_results <- 
@@ -257,6 +335,27 @@ validation_probs_thresh <-
 best_acc = validation_probs_thresh %>% 
   arrange(-balanced_accuracy) %>% 
   head(n=1)
+
+```
+
+Examine confusion matrices for default prediction cutoffs
+
+```{r}
+
+validation_preds_by_race <- group_split(meps_validation_results, RACE)
+#since list names are not supplied by `group_split`
+names(validation_preds_by_race) <- sapply(validation_preds_by_race, function(x) x$RACE[1])
+
+lapply(validation_preds_by_race, function(x){
+  conf_mat(x, .pred_class, high_utilization, dnn=c("Utilization", "Predicted Utilization"))
+})
+
+  
+```
+
+```{r}
+
+table(validation_preds_by_race$White$high_utilization)
 
 ```
 
@@ -295,7 +394,7 @@ and protected feature category. We saw this in Section 2.
 For case-weights to work with `tidymodels`, they need to be (re)defined
 by passing them to the `importance_weights()` function. The defined
 recipe will automatically detect them. See this
-[reference](https=//recipes.tidymodels.org/reference/case_weights.html)
+[reference](https://recipes.tidymodels.org/reference/case_weights.html)
 for more info.
 
 ```{r}
@@ -610,7 +709,7 @@ select(
 ```
 
 Note that most of these variables are categorical variables encoded as
-0/1 so the `mean.*` columns specify the frequency.
+0/1 so the `mean.*` columns specify the proportion.
 
 ```{r}
 
