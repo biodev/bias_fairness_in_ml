@@ -1,0 +1,216 @@
+# Simulate Federated Learning Data Layout
+
+## First Create an overall dataset
+
+```{r}
+
+source("helpers.R")
+
+meps_19 <- process_meps_csv("h181.csv", 19)
+
+# pre-bake the data to simply preprocessing
+
+level_transform <- function(x) { as.integer(x + 2)}
+
+for (cat in categorical_vars){
+    meps_19[[cat]] <- factor(level_transform(meps_19[[cat]]))
+}
+
+if (dir.exists("for_fl") == F){
+    dir.create("for_fl")
+}
+
+tmp_site <- "overall"
+
+if (dir.exists(paste0("for_fl/", tmp_site)) == F){
+      dir.create(paste0("for_fl/", tmp_site))
+}
+
+init_split <- initial_split(meps_19, strata = high_utilization, prop=.8)
+  
+tmp_train <- training(init_split)
+
+#add the reweigting to the training data
+
+#R-version from helpers.R
+tmp_train_rw <- reweight(
+  tmp_train,
+  "high_utilization",
+  "RACE")
+
+#pre-process the data
+
+train_recipe <- meps_base_recipe2(tmp_train_rw, addtl_vars=c("instance_weights"))
+
+train_prepped <- prep(
+  train_recipe, 
+  training = tmp_train_rw
+)
+
+train_baked <- bake(train_prepped, new_data=NULL)
+
+#then split test into validation/test
+
+tmp_test <- testing(init_split)
+
+tmp_test <- mutate(tmp_test, instance_weights=0)
+
+tv_split <- initial_split(tmp_test, strata = high_utilization, prop=.5)
+
+tmp_valid = training(tv_split)
+
+val_baked <- bake(train_prepped, new_data=tmp_valid)
+
+tmp_test = testing(tv_split)
+
+test_baked <- bake(train_prepped, new_data=tmp_test)
+
+tmp.train <- train_baked %>%
+  relocate(high_utilization, instance_weights)
+
+readr::write_csv(tmp.train, file=paste0("for_fl/", tmp_site, "/train.csv"))
+
+tmp.val <- val_baked  %>%
+  relocate(high_utilization, instance_weights)
+
+readr::write_csv(tmp.val, file=paste0("for_fl/", tmp_site, "/validation.csv"))
+
+tmp.test <- test_baked  %>%
+  relocate(high_utilization, instance_weights)
+
+readr::write_csv(tmp.test, file=paste0("for_fl/", tmp_site, "/test.csv"))
+
+```
+
+## Split MEPS data into train/validate/test for three different 'sites'
+
+```{r}
+
+source("helpers.R")
+
+meps_19 <- process_meps_csv("h181.csv", 19)
+
+# pre-bake the data to simply preprocessing
+
+level_transform <- function(x) { as.integer(x + 2)}
+
+for (cat in categorical_vars){
+    meps_19[[cat]] <- factor(level_transform(meps_19[[cat]]))
+}
+
+# First split into 3 chunks of equal size representing the FL sites
+
+site.size <- ceiling(nrow(meps_19) / 3)
+
+meps_by_batch <- meps_19[sample.int(nrow(meps_19)),] %>%
+    mutate(batch=rep(c(1,2,3), each=site.size)[1:nrow(meps_19)]) %>%
+  group_by(batch) %>%
+  group_split()
+
+overall_tbls <- list(
+  train=readr::read_delim("for_fl/overall/train.csv"),
+  val=readr::read_delim("for_fl/overall/validation.csv"),
+  test=readr::read_delim("for_fl/overall/test.csv")
+)
+
+for(i in seq_along(meps_by_batch)){
+  
+  tmp_site <- paste0("site_", i)
+  
+  if (dir.exists(paste0("for_fl/", tmp_site)) == F){
+      dir.create(paste0("for_fl/", tmp_site))
+  }
+  
+  init_split <- initial_split(meps_by_batch[[i]], strata = high_utilization, prop=.8)
+  
+  tmp_train <- training(init_split)
+  
+  #add the reweigting to the training data
+  
+  #R-version from helpers.R
+  tmp_train_rw <- reweight(
+    tmp_train,
+    "high_utilization",
+    "RACE")
+  
+  #pre-process the data
+  
+  train_recipe <- meps_base_recipe2(tmp_train_rw, addtl_vars=c("instance_weights"))
+  
+  train_prepped <- prep(
+    train_recipe, 
+    training = tmp_train_rw
+  )
+  
+  train_baked <- bake(train_prepped, new_data=NULL)
+  
+  #then split test into validation/test
+  
+  tmp_test <- testing(init_split)
+  
+  tmp_test <- mutate(tmp_test, instance_weights=0)
+  
+  tv_split <- initial_split(tmp_test, strata = high_utilization, prop=.5)
+  
+  tmp_valid = training(tv_split)
+  
+  val_baked <- bake(train_prepped, new_data=tmp_valid)
+  
+  tmp_test = testing(tv_split)
+  
+  test_baked <- bake(train_prepped, new_data=tmp_test)
+  
+  #add in columns missing relative to overall
+  
+  #if missing in train it will be missing in all
+  missing_cols <- setdiff(names(overall_tbls$train), names(train_baked))
+  
+  for(col in missing_cols){
+    train_baked[[col]] <- 0
+    val_baked[[col]] <- 0
+    test_baked[[col]] <- 0
+  }
+  
+  readr::write_csv(train_baked[,names(overall_tbls$train)], file=paste0("for_fl/", tmp_site, "/train.csv"))
+  readr::write_csv(val_baked[,names(overall_tbls$train)], file=paste0("for_fl/", tmp_site, "/validation.csv"))
+  readr::write_csv(test_baked[,names(overall_tbls$train)], file=paste0("for_fl/", tmp_site, "/test.csv"))
+  
+}
+
+```
+
+# Check to insure columns are the same as the overall model across sites
+
+```{r}
+
+library(tidyverse)
+
+site.train.files <- list.files("for_fl", pattern="train.csv", recursive=T, full.names=T)
+
+overall.train <- readr::read_delim("for_fl/overall/train.csv")
+
+train.ok <- sapply(site.train.files, function(x){
+  tmp.x <- readr::read_delim(x)
+  stopifnot(all(colnames(overall.train) == colnames(tmp.x)))
+})
+
+site.val.files <- list.files("for_fl", pattern="validation.csv", recursive=T, full.names=T)
+
+overall.val <- readr::read_delim("for_fl/overall/validation.csv")
+
+val.ok <- sapply(site.val.files, function(x){
+  tmp.x <- readr::read_delim(x)
+  stopifnot(all(colnames(overall.val) == colnames(tmp.x)))
+})
+
+site.test.files <- list.files("for_fl", pattern="test.csv", recursive=T, full.names=T)
+
+overall.test <- readr::read_delim("for_fl/overall/test.csv")
+
+test.ok <- sapply(site.test.files, function(x){
+  tmp.x <- readr::read_delim(x)
+  stopifnot(all(colnames(overall.test) == colnames(tmp.x)))
+})
+
+
+```

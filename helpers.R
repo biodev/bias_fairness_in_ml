@@ -111,6 +111,35 @@ meps_base_recipe <- function(meps_tbl, addtl_vars=NULL){
 
 }
 
+meps_base_recipe2 <- function(meps_tbl, addtl_vars=NULL){
+  
+  if ((missing(addtl_vars) || all(is.na(addtl_vars)) || is.null(addtl_vars)) == F){
+    vars_to_keep <- c(vars_to_keep, addtl_vars)
+  }
+  
+  numeric.vars <- setdiff(vars_to_keep, c(categorical_vars, "high_utilization", "RACE", addtl_vars))
+  
+  meps_rec <- recipe(
+    meps_tbl,
+    vars = vars_to_keep,
+    roles = ifelse(vars_to_keep == "high_utilization", "outcome", "predictor")
+  ) %>% 
+    step_dummy(all_of(categorical_vars)) %>%
+    step_dummy(RACE) %>%
+    step_zv(all_predictors()) %>%
+    #below deviates from original code, but makes this more useful in other modeling contexts
+    step_lincomb(all_predictors()) %>%
+    #need to remove this manually since step_lincomb keeps it, but is not estimable
+    step_rm(REGION_X4) %>%
+    #for the numeric variables, median impute and rescaled to 0-1 to be somewhat comparable to categorical
+    step_impute_mean(all_of(numeric.vars)) %>%
+    step_range(all_of(numeric.vars),min=0, max=1)
+  
+  
+  meps_rec
+  
+}
+
 #R implementation of bias-reduction reweighting:
 #Kamiran, F., Calders, T. Data preprocessing techniques for classification without discrimination. Knowl Inf Syst 33, 1–33 (2012). https://doi.org/10.1007/s10115-011-0463-8
 #Given a (training) dataset tibble, column name of categorical outcome and column name of protected feature
